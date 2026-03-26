@@ -18,7 +18,8 @@ from bs4 import BeautifulSoup
 
 URL = "https://www.metopera.org/season/tickets/student-tickets/"
 STATE_FILE = Path(__file__).parent.parent / "state.json"
-RECIPIENT_EMAIL = "zengyofficial@gmail.com"
+RECIPIENT_EMAILS = ["anton.everts@lmh.ox.ac.uk", "second@example.com"]
+
 
 MONTH_ABBR = {
     "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
@@ -139,13 +140,13 @@ def send_email(subject: str, body: str) -> None:
     msg = MIMEText(body)
     msg["Subject"] = subject
     msg["From"] = smtp_user
-    msg["To"] = RECIPIENT_EMAIL
+    msg["To"] = ", ".join(RECIPIENT_EMAILS)
 
     with smtplib.SMTP(smtp_host, smtp_port) as server:
         server.ehlo()
         server.starttls()
         server.login(smtp_user, smtp_password)
-        server.sendmail(smtp_user, [RECIPIENT_EMAIL], msg.as_string())
+        server.sendmail(smtp_user, RECIPIENT_EMAILS, msg.as_string())
 
     print(f"Email sent: {subject}")
 
