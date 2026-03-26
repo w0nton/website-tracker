@@ -1,0 +1,211 @@
+"""
+Checks the Met Opera student tickets page for new performances that are sooner
+than the current earliest known performance. Sends an email alert if found.
+"""
+
+import json
+import os
+import re
+import smtplib
+import sys
+from datetime import date, datetime
+from email.mime.text import MIMEText
+from pathlib import Path
+
+import requests
+from bs4 import BeautifulSoup
+
+URL = "https://www.metopera.org/season/tickets/student-tickets/"
+STATE_FILE = Path(__file__).parent.parent / "state.json"
+RECIPIENT_EMAIL = "anton.everts@lmh.ox.ac.uk"
+
+# Months abbreviation map for parsing "Apr 06" style dates
+MONTH_ABBR = {
+    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+}
+
+
+def parse_performance_date(date_str: str) -> date | None:
+    date_str = date_str.strip()
+    date_str = re.sub(r"^[A-Za-z]{3},\s*", "", date_str)
+
+    match = re.match(r"([A-Za-z]{3})\s+(\d{1,2})", date_str)
+    if not match:
+        return None
+
+    month_name, day_str = match.group(1), match.group(2)
+    month = MONTH_ABBR.get(month_name)
+    if month is None:
+        return None
+
+    day = int(day_str)
+    today = date.today()
+
+    try:
+        candidate = date(today.year, month, day)
+    except ValueError:
+        return None
+
+    if (candidate - today).days < -30:
+        try:
+            candidate = date(today.year + 1, month, day)
+        except ValueError:
+            return None
+
+    return candidate
+
+
+def fetch_page() -> str:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+    }
+    response = requests.get(URL, headers=headers, timeout=30)
+    response.raise_for_status()
+    return response.text
+
+
+def extract_performances(html: str) -> list[dict]:
+    soup = BeautifulSoup(html, "html.parser")
+    performances = []
+
+    date_pattern = re.compile(
+        r"\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun),?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\b"
+    )
+
+    seen_dates = set()
+    for tag in soup.find_all(True):
+        if tag.find(True):
+            continue
+        text = tag.get_text(separator=" ", strip=True)
+        match = date_pattern.search(text)
+        if not match:
+            continue
+
+        date_str = match.group(0)
+        parsed = parse_performance_date(date_str)
+        if parsed is None or parsed in seen_dates:
+            continue
+        seen_dates.add(parsed)
+
+        name = ""
+        ancestor = tag.parent
+        for _ in range(6):
+            if ancestor is None:
+                break
+            ancestor_text = ancestor.get_text(separator=" ", strip=True)
+            if len(ancestor_text) > len(date_str) + 3 and len(ancestor_text) < 500:
+                name_candidate = date_pattern.sub("", ancestor_text).strip(" ,|/-")
+                name_candidate = re.sub(r"\s{2,}", " ", name_candidate)
+                if name_candidate:
+                    name = name_candidate
+                    break
+            ancestor = ancestor.parent
+
+        if not name:
+            name = "(unknown performance)"
+
+        performances.append({"name": name, "date": parsed, "date_str": date_str})
+
+    if not performances:
+        text = soup.get_text(separator="\n")
+        for match in date_pattern.finditer(text):
+            date_str = match.group(0)
+            parsed = parse_performance_date(date_str)
+            if parsed is None or parsed in seen_dates:
+                continue
+            seen_dates.add(parsed)
+            start = max(0, match.start() - 80)
+            end = min(len(text), match.end() + 80)
+            context = text[start:end].replace("\n", " ").strip()
+            performances.append({"name": context, "date": parsed, "date_str": date_str})
+
+    performances.sort(key=lambda p: p["date"])
+    return performances
+
+
+def load_state() -> dict:
+    if STATE_FILE.exists():
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def save_state(state: dict) -> None:
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, indent=2, default=str)
+
+
+def send_email(subject: str, body: str) -> None:
+    smtp_user = os.environ["SMTP_USER"]
+    smtp_password = os.environ["SMTP_PASSWORD"]
+    smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = smtp_user
+    msg["To"] = RECIPIENT_EMAIL
+
+    with smtplib.SMTP(smtp_host, smtp_port) as server:
+        server.ehlo()
+        server.starttls()
+        server.login(smtp_user, smtp_password)
+        server.sendmail(smtp_user, [RECIPIENT_EMAIL], msg.as_string())
+
+    print(f"Email sent: {subject}")
+
+
+def main() -> None:
+    print(f"Fetching {URL} ...")
+    try:
+        html = fetch_page()
+    except Exception as e:
+        print(f"ERROR: Could not fetch page: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    performances = extract_performances(html)
+    if not performances:
+        print("WARNING: No performances found on page — page structure may have changed.")
+        sys.exit(0)
+
+    earliest = performances[0]
+    print(f"Earliest performance found: {earliest['name']!r} on {earliest['date_str']}")
+
+    state = load_state()
+    stored_date_str = state.get("earliest_date")
+
+    if stored_date_str:
+        stored_date = date.fromisoformat(stored_date_str)
+        if earliest["date"] < stored_date:
+            print(f"New earlier performance detected! {earliest['date']} < {stored_date}")
+            subject = f"New Met Opera student ticket: {earliest['name']} on {earliest['date_str']}"
+            body = (
+                f"A new, sooner Met Opera student performance is now available!\n\n"
+                f"Performance: {earliest['name']}\n"
+                f"Date: {earliest['date_str']}\n\n"
+                f"Book here: {URL}\n\n"
+                f"Previously earliest known date: {stored_date_str}\n"
+                f"(This alert was sent automatically by your GitHub Actions monitor.)"
+            )
+            send_email(subject, body)
+        else:
+            print(f"No earlier performance than {stored_date_str}. Nothing to do.")
+    else:
+        print(f"No stored state yet. Recording current earliest: {earliest['date']}")
+
+    state["earliest_date"] = earliest["date"].isoformat()
+    state["earliest_performance"] = earliest["name"]
+    state["last_checked"] = datetime.utcnow().isoformat()
+    save_state(state)
+    print("State saved.")
+
+
+if __name__ == "__main__":
+    main()
