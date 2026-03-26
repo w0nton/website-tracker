@@ -158,15 +158,12 @@ def format_performance_list(performances: list[dict]) -> str:
 
 
 def should_send_daily_summary(state: dict) -> bool:
-    """Send daily summary once per day, at or after 9am UTC."""
+    """Send daily summary once per day."""
     now = datetime.now(timezone.utc)
-    if now.hour < 9:
-        return False
     last_sent_str = state.get("last_daily_summary")
     if not last_sent_str:
         return True
     last_sent = datetime.fromisoformat(last_sent_str)
-    # Send if we haven't sent one today yet
     return last_sent.date() < now.date()
 
 
