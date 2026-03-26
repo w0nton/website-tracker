@@ -1,6 +1,7 @@
 """
-Checks the Met Opera student tickets page for new performances that are sooner
-than the current earliest known performance. Sends an email alert if found.
+Checks the Met Opera student tickets page every 15 minutes.
+- Sends an immediate alert if a sooner performance appears.
+- Sends a daily summary of all available performances at 9am UTC.
 """
 
 import json
@@ -8,7 +9,7 @@ import os
 import re
 import smtplib
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from email.mime.text import MIMEText
 from pathlib import Path
 
@@ -19,7 +20,6 @@ URL = "https://www.metopera.org/season/tickets/student-tickets/"
 STATE_FILE = Path(__file__).parent.parent / "state.json"
 RECIPIENT_EMAIL = "anton.everts@lmh.ox.ac.uk"
 
-# Months abbreviation map for parsing "Apr 06" style dates
 MONTH_ABBR = {
     "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
     "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
@@ -29,30 +29,23 @@ MONTH_ABBR = {
 def parse_performance_date(date_str: str) -> date | None:
     date_str = date_str.strip()
     date_str = re.sub(r"^[A-Za-z]{3},\s*", "", date_str)
-
     match = re.match(r"([A-Za-z]{3})\s+(\d{1,2})", date_str)
     if not match:
         return None
-
-    month_name, day_str = match.group(1), match.group(2)
-    month = MONTH_ABBR.get(month_name)
+    month = MONTH_ABBR.get(match.group(1))
     if month is None:
         return None
-
-    day = int(day_str)
+    day = int(match.group(2))
     today = date.today()
-
     try:
         candidate = date(today.year, month, day)
     except ValueError:
         return None
-
     if (candidate - today).days < -30:
         try:
             candidate = date(today.year + 1, month, day)
         except ValueError:
             return None
-
     return candidate
 
 
@@ -74,12 +67,11 @@ def fetch_page() -> str:
 def extract_performances(html: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     performances = []
-
     date_pattern = re.compile(
         r"\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun),?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\b"
     )
-
     seen_dates = set()
+
     for tag in soup.find_all(True):
         if tag.find(True):
             continue
@@ -87,7 +79,6 @@ def extract_performances(html: str) -> list[dict]:
         match = date_pattern.search(text)
         if not match:
             continue
-
         date_str = match.group(0)
         parsed = parse_performance_date(date_str)
         if parsed is None or parsed in seen_dates:
@@ -108,10 +99,7 @@ def extract_performances(html: str) -> list[dict]:
                     break
             ancestor = ancestor.parent
 
-        if not name:
-            name = "(unknown performance)"
-
-        performances.append({"name": name, "date": parsed, "date_str": date_str})
+        performances.append({"name": name or "(unknown performance)", "date": parsed, "date_str": date_str})
 
     if not performances:
         text = soup.get_text(separator="\n")
@@ -162,6 +150,26 @@ def send_email(subject: str, body: str) -> None:
     print(f"Email sent: {subject}")
 
 
+def format_performance_list(performances: list[dict]) -> str:
+    lines = []
+    for p in performances:
+        lines.append(f"  - {p['date_str']}: {p['name']}")
+    return "\n".join(lines)
+
+
+def should_send_daily_summary(state: dict) -> bool:
+    """Send daily summary once per day, at or after 9am UTC."""
+    now = datetime.now(timezone.utc)
+    if now.hour < 9:
+        return False
+    last_sent_str = state.get("last_daily_summary")
+    if not last_sent_str:
+        return True
+    last_sent = datetime.fromisoformat(last_sent_str)
+    # Send if we haven't sent one today yet
+    return last_sent.date() < now.date()
+
+
 def main() -> None:
     print(f"Fetching {URL} ...")
     try:
@@ -176,33 +184,51 @@ def main() -> None:
         sys.exit(0)
 
     earliest = performances[0]
-    print(f"Earliest performance found: {earliest['name']!r} on {earliest['date_str']}")
+    print(f"Found {len(performances)} performance(s). Earliest: {earliest['name']!r} on {earliest['date_str']}")
 
     state = load_state()
-    stored_date_str = state.get("earliest_date")
+    now = datetime.now(timezone.utc)
 
+    # --- Alert: new sooner performance ---
+    stored_date_str = state.get("earliest_date")
     if stored_date_str:
         stored_date = date.fromisoformat(stored_date_str)
         if earliest["date"] < stored_date:
-            print(f"New earlier performance detected! {earliest['date']} < {stored_date}")
-            subject = f"New Met Opera student ticket: {earliest['name']} on {earliest['date_str']}"
+            print(f"New earlier performance detected: {earliest['date']} < {stored_date}")
+            subject = f"ALERT: New sooner Met Opera student ticket — {earliest['name']} on {earliest['date_str']}"
             body = (
                 f"A new, sooner Met Opera student performance is now available!\n\n"
                 f"Performance: {earliest['name']}\n"
                 f"Date: {earliest['date_str']}\n\n"
+                f"All currently available performances:\n"
+                f"{format_performance_list(performances)}\n\n"
                 f"Book here: {URL}\n\n"
-                f"Previously earliest known date: {stored_date_str}\n"
-                f"(This alert was sent automatically by your GitHub Actions monitor.)"
+                f"Previously earliest known date: {stored_date_str}"
             )
             send_email(subject, body)
         else:
-            print(f"No earlier performance than {stored_date_str}. Nothing to do.")
+            print(f"No earlier performance than {stored_date_str}.")
     else:
         print(f"No stored state yet. Recording current earliest: {earliest['date']}")
 
+    # --- Daily summary ---
+    if should_send_daily_summary(state):
+        print("Sending daily summary email...")
+        subject = f"Daily Met Opera student tickets update — {now.strftime('%d %b %Y')}"
+        body = (
+            f"Here are all Met Opera student performances currently available:\n\n"
+            f"{format_performance_list(performances)}\n\n"
+            f"Book here: {URL}"
+        )
+        send_email(subject, body)
+        state["last_daily_summary"] = now.isoformat()
+    else:
+        print("Daily summary already sent today, skipping.")
+
+    # --- Save state ---
     state["earliest_date"] = earliest["date"].isoformat()
     state["earliest_performance"] = earliest["name"]
-    state["last_checked"] = datetime.utcnow().isoformat()
+    state["last_checked"] = now.isoformat()
     save_state(state)
     print("State saved.")
 
