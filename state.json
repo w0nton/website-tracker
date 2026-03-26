@@ -1,6 +1,7 @@
 {
+  "known_dates": ["2026-04-06", "2026-04-09", "2026-04-12", "2026-04-15", "2026-04-18", "2026-04-21", "2026-04-24"],
   "earliest_date": "2026-04-06",
-  "earliest_performance": "7:00 PM Innocence",
-  "last_checked": "2026-03-26T00:57:34.840445+00:00",
-  "last_daily_summary": "2026-03-26T00:57:34.840445+00:00"
+  "earliest_performance": "Innocence",
+  "last_checked": null,
+  "last_daily_summary": null
 }
