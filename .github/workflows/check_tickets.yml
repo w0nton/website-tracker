@@ -2,7 +2,7 @@ name: Check Met Opera Student Tickets
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/3 * * * *"
   workflow_dispatch:
 
 permissions:
