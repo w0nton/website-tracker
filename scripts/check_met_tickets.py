@@ -162,7 +162,7 @@ def should_send_daily_summary(state: dict) -> bool:
     """Send daily summary once per day."""
     now = datetime.now(timezone.utc)
     last_sent_str = state.get("last_daily_summary")
-    if not last_sent_str:
+    if not last_sent_str or last_sent_str == "null":
         return True
     last_sent = datetime.fromisoformat(last_sent_str)
     return last_sent.date() < now.date()
