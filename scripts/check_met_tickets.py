@@ -18,7 +18,7 @@ from bs4 import BeautifulSoup
 
 URL = "https://www.metopera.org/season/tickets/student-tickets/"
 STATE_FILE = Path(__file__).parent.parent / "state.json"
-RECIPIENT_EMAILS = ["zengyofficial@gmail.com", "info@juventuspromusica.org"]
+RECIPIENT_EMAILS = ["zengyofficial@gmail.com", "info@juventuspromusica.org", "akbarali672006@gmail.com"]
 
 MONTH_ABBR = {
     "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
