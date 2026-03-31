@@ -26,6 +26,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Install Playwright browser
+        run: playwright install chromium --with-deps
+
       - name: Run ticket checker
         env:
           SMTP_USER: ${{ secrets.SMTP_USER }}
