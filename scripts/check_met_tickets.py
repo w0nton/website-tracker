@@ -13,7 +13,7 @@ from datetime import date, datetime, timezone
 from email.mime.text import MIMEText
 from pathlib import Path
 
-import requests
+import cloudscraper
 from bs4 import BeautifulSoup
 
 URL = "https://www.metopera.org/season/tickets/student-tickets/"
