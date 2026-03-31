@@ -13,7 +13,8 @@ from datetime import date, datetime, timezone
 from email.mime.text import MIMEText
 from pathlib import Path
 
-import cloudscraper
+from playwright.sync_api import sync_playwright
+
 from bs4 import BeautifulSoup
 
 URL = "https://www.metopera.org/season/tickets/student-tickets/"
@@ -50,10 +51,13 @@ def parse_performance_date(date_str: str) -> date | None:
 
 
 def fetch_page() -> str:
-    scraper = cloudscraper.create_scraper()
-    response = scraper.get(URL, timeout=30)
-    response.raise_for_status()
-    return response.text
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(URL, wait_until="networkidle", timeout=30000)
+        content = page.content()
+        browser.close()
+        return content
 
 
 def extract_performances(html: str) -> list[dict]:
