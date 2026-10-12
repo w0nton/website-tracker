@@ -66,6 +66,15 @@ def fetch_page() -> str:
         )
         page = context.new_page()
         response = page.goto(URL, wait_until="domcontentloaded", timeout=60000)
+        # Cloudflare shows a "Just a moment..." check page first, then redirects
+        # to the real page once it decides we're not a bot. Wait for that.
+        for _ in range(45):
+            try:
+                if "just a moment" not in page.title().lower():
+                    break
+            except Exception:
+                pass  # the page is mid-redirect; try again shortly
+            page.wait_for_timeout(2000)
         try:
             page.wait_for_load_state("networkidle", timeout=20000)
         except Exception:
