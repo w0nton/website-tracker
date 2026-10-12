@@ -52,9 +52,25 @@ def parse_performance_date(date_str: str) -> date | None:
 
 def fetch_page() -> str:
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(URL, wait_until="networkidle", timeout=30000)
+        browser = p.chromium.launch(
+            headless=True, args=["--disable-blink-features=AutomationControlled"]
+        )
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/129.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1366, "height": 900},
+            locale="en-US",
+        )
+        page = context.new_page()
+        response = page.goto(URL, wait_until="domcontentloaded", timeout=60000)
+        try:
+            page.wait_for_load_state("networkidle", timeout=20000)
+        except Exception:
+            pass  # some sites never go fully idle; the content is usually there anyway
+        print(f"HTTP status: {response.status if response else 'none'}, title: {page.title()!r}")
         content = page.content()
         browser.close()
         return content
@@ -173,8 +189,10 @@ def main() -> None:
 
     performances = extract_performances(html)
     if not performances:
-        print("WARNING: No performances found on page — page structure may have changed.")
-        sys.exit(0)
+        text = BeautifulSoup(html, "html.parser").get_text(separator=" ", strip=True)
+        print("ERROR: No performances found on page. Page text was:", file=sys.stderr)
+        print(text[:3000], file=sys.stderr)
+        sys.exit(1)
 
     earliest = performances[0]
     print(f"Found {len(performances)} performance(s). Earliest: {earliest['name']!r} on {earliest['date_str']}")
