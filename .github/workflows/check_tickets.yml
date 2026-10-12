@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: "*/3 * * * *"
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/**"
+      - ".github/workflows/**"
+      - "requirements.txt"
 
 permissions:
   contents: write
